@@ -1,0 +1,38 @@
+version: "3.8"
+
+services:
+  whatsapp-1:
+    image: blakegt/whatsapp-web-api-rest:latest
+    container_name: whatsapp-1
+    restart: unless-stopped
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./data/whatsapp-1:/app/data
+
+  whatsapp-2:
+    image: blakegt/whatsapp-web-api-rest:latest
+    container_name: whatsapp-2
+    restart: unless-stopped
+    ports:
+      - "8086:8085"
+    volumes:
+      - ./data/whatsapp-2:/app/data
+
+  whatsapp-3:
+    image: blakegt/whatsapp-web-api-rest:latest
+    container_name: whatsapp-3
+    restart: unless-stopped
+    ports:
+      - "8087:8085"
+    volumes:
+      - ./data/whatsapp-3:/app/data
+
+  whatsapp-4:
+    image: blakegt/whatsapp-web-api-rest:latest
+    container_name: whatsapp-4
+    restart: unless-stopped
+    ports:
+      - "8088:8085"
+    volumes:
+      - ./data/whatsapp-4:/app/data

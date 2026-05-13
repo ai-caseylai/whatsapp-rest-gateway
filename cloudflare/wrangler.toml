@@ -1,6 +1,12 @@
 name = "whatsapp-gateway-hub"
 main = "src/index.js"
 compatibility_date = "2025-05-01"
+workers_dev = true
+
+# 自訂網域
+routes = [
+  { pattern = "e-plus-mh.techforliving.net", custom_domain = true }
+]
 
 [[durable_objects.bindings]]
 name = "HUB"

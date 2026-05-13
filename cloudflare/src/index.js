@@ -311,6 +311,8 @@ class HubDO {
 // ============================================================
 export { HubDO };
 
+import adminHtml from "./admin.js";
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -320,6 +322,13 @@ export default {
       const doId = env.HUB.idFromName("primary");
       const doStub = env.HUB.get(doId);
       return doStub.fetch(request);
+    }
+
+    // HTTP — 管理後台
+    if (request.method === "GET" && (url.pathname === "/" || url.pathname === "/admin")) {
+      return new Response(adminHtml, {
+        headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "public, max-age=3600" },
+      });
     }
 
     // HTTP — 健康檢查
@@ -334,7 +343,7 @@ export default {
       });
     }
 
-    // HTTP — POST /api/send（需帶 Authorization 和帳號資訊）
+    // HTTP — POST /api/send
     if (url.pathname === "/api/send" && request.method === "POST") {
       try {
         const body = await request.json();
@@ -369,8 +378,9 @@ export default {
       });
     }
 
-    return new Response("WhatsApp Gateway Hub", {
-      headers: { "Content-Type": "text/plain" },
+    // fallback — 管理後台
+    return new Response(adminHtml, {
+      headers: { "Content-Type": "text/html; charset=utf-8" },
     });
   },
 };

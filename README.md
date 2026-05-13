@@ -105,27 +105,63 @@ GET    /api/webhooks              # 列表
 }
 ```
 
-## WebSocket Hub
+## WebSocket Hub（需帳號密碼）
 
-CRM 端連線：
+### 連線 + 登入流程
 
 ```javascript
 const ws = new WebSocket('wss://e-plus-mh.techforliving.net?role=client');
 
+ws.onopen = () => {
+  // 先登入
+  ws.send(JSON.stringify({
+    type: 'login',
+    username: 'crm',
+    password: 'crm123'
+  }));
+};
+
 ws.onmessage = (e) => {
   const msg = JSON.parse(e.data);
-  if (msg.type === 'whatsapp.inbound') {
-    console.log(`[${msg.instance}] ${msg.from}: ${msg.body}`);
+
+  switch (msg.type) {
+    case 'login-ok':
+      // 登入成功，開始收發
+      ws.send(JSON.stringify({ type: 'status' }));
+      break;
+    case 'login-error':
+      console.error('登入失敗:', msg.error);
+      break;
+    case 'whatsapp.inbound':
+      console.log(`[實例${msg.instance}] ${msg.from}: ${msg.body}`);
+      break;
+    case 'send-result':
+      console.log('發送', msg.ok ? '成功' : '失敗');
+      break;
   }
 };
 
-// 發送
+// 發送訊息
 ws.send(JSON.stringify({
   type: 'send-text',
   instance: 1,
   target: '+85212345678',
   text: '您好'
 }));
+```
+
+### 內建帳號
+
+| 帳號 | 密碼 | 用途 |
+|------|------|------|
+| `crm` | `crm123` | CRM 主系統 |
+| `admin` | `admin123` | 管理員 |
+| `bot` | `bot123` | 自動機器人 |
+
+修改帳號密碼：
+```bash
+echo '[{"username":"新帳號","password":"新密碼","label":"標籤"}]' | \
+  CLOUDFLARE_API_TOKEN=xxx npx wrangler secret put HUB_ACCOUNTS
 ```
 
 ## 專案結構

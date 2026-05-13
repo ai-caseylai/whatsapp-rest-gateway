@@ -136,10 +136,11 @@
 const API = '';
 let apiKey = '';
 
-// ── Cloudflare Hub WebSocket ──
+// ── Cloudflare Hub WebSocket + 登入 ──
 const HUB_URL = 'wss://e-plus-mh.techforliving.net';
 let hubWs = null;
 let hubClients = 0;
+let hubUsername = '';
 
 function connectHub() {
   try {
@@ -147,26 +148,37 @@ function connectHub() {
     document.getElementById('hubUrl').textContent = HUB_URL;
 
     hubWs.onopen = () => {
-      document.getElementById('hubStatus').innerHTML = '<span class="dot green"></span>已連接';
-      hubWs.send(JSON.stringify({ type: 'status' }));
+      document.getElementById('hubStatus').innerHTML = '<span class="dot yellow"></span>已連接，登入中...';
+      // 自動登入（可改成彈窗輸入）
+      const user = prompt('Hub 帳號:') || 'admin';
+      const pass = prompt('Hub 密碼:') || 'admin123';
+      hubWs.send(JSON.stringify({ type: 'login', username: user, password: pass }));
     };
 
     hubWs.onmessage = (evt) => {
       const msg = JSON.parse(evt.data);
-      if (msg.type === 'status') {
-        hubClients = (msg.clients || []).filter(c => c.role === 'client').length;
+      if (msg.type === 'login-ok') {
+        hubUsername = msg.username;
+        document.getElementById('hubStatus').innerHTML = '<span class="dot green"></span>已登入 (' + msg.username + ')';
+        hubWs.send(JSON.stringify({ type: 'status' }));
+        toast('登入成功：' + (msg.label || msg.username), true);
+      } else if (msg.type === 'login-error') {
+        document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>登入失敗: ' + msg.error;
+        toast('登入失敗: ' + msg.error, false);
+      } else if (msg.type === 'status') {
+        hubClients = (msg.clients || []).filter(c => c.role === 'client' && c.authenticated).length;
         document.getElementById('hubClients').textContent = hubClients;
         document.getElementById('connStatus').innerHTML = msg.connectorOnline
           ? '<span class="dot green"></span>在線'
           : '<span class="dot red"></span>離線';
+        document.getElementById('authBadge').textContent = '已登入: ' + hubUsername;
       } else if (msg.type === 'system') {
         if (msg.event === 'connector.online') {
           document.getElementById('connStatus').innerHTML = '<span class="dot green"></span>在線';
         } else if (msg.event === 'connector.offline') {
           document.getElementById('connStatus').innerHTML = '<span class="dot red"></span>離線';
-        } else if (msg.event === 'client.join' || msg.event === 'client.leave') {
-          hubWs.send(JSON.stringify({ type: 'status' }));
         }
+        hubWs.send(JSON.stringify({ type: 'status' }));
       }
     };
 

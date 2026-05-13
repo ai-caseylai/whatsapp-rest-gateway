@@ -3,29 +3,43 @@
 //  中央 WebSocket 交換中心
 // ============================================================
 
-// 環境變數：在 wrangler.toml 或 Cloudflare Dashboard 設定
-// CONNECTOR_SECRET — 本地 connector 的認證密鑰
-// CLIENT_SECRET    — CRM 客戶端的認證密鑰（可選）
+// 環境變數（wrangler secret / Cloudflare Dashboard 設定）：
+//   CONNECTOR_SECRET — 本地 connector 認證
+//   HUB_ACCOUNTS     — JSON: [{"username":"crm","password":"...","label":"CRM"}]
+//   CLIENT_SECRET    — (可選) 舊版 token 認證
 
 // ============================================================
-//  Durable Object — 每個 DO 實例維護一群 WebSocket 連線
+//  Durable Object
 // ============================================================
 class HubDO {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    // sessions: Map<WebSocket, { role, id, connectedAt }>
-    this.sessions = new Map();
-    // 用 state.storage 跨請求持久化連線 ID（非必要但可追蹤）
+    this.sessions = new Map();  // WebSocket → { role, id, username, label, connectedAt }
+  }
+
+  // 解析帳號清單
+  getAccounts() {
+    try {
+      const raw = this.env.HUB_ACCOUNTS || "[]";
+      return JSON.parse(raw);
+    } catch {
+      return [];
+    }
+  }
+
+  // 驗證帳號密碼
+  validateLogin(username, password) {
+    const accounts = this.getAccounts();
+    return accounts.find(a => a.username === username && a.password === password) || null;
   }
 
   async fetch(request) {
     const url = new URL(request.url);
     const role = url.searchParams.get("role") || "client";
     const token = url.searchParams.get("token") || "";
-    const instanceId = url.searchParams.get("instance") || "";
 
-    // 認證 connector
+    // connector 認證
     if (role === "connector") {
       const expected = this.env.CONNECTOR_SECRET || "";
       if (expected && token !== expected) {
@@ -33,9 +47,9 @@ class HubDO {
       }
     }
 
-    // 若 client 有設定密鑰，也驗證
-    if (role === "client" && this.env.CLIENT_SECRET && token !== this.env.CLIENT_SECRET) {
-      return new Response("Unauthorized", { status: 401 });
+    // 舊版 client token 認證（可選）
+    if (role === "client" && this.env.CLIENT_SECRET && token === this.env.CLIENT_SECRET) {
+      // token 有效，允許略過 login
     }
 
     // 升級到 WebSocket
@@ -45,24 +59,34 @@ class HubDO {
     serverWs.accept();
     serverWs.role = role;
     serverWs.id = crypto.randomUUID();
-    serverWs.instanceId = instanceId || null;
+    serverWs.authenticated = false;
+    serverWs.username = null;
     serverWs.connectedAt = Date.now();
+
+    // 舊版 token 認證過的直接標記
+    if (role === "client" && this.env.CLIENT_SECRET && token === this.env.CLIENT_SECRET) {
+      serverWs.authenticated = true;
+      serverWs.username = "token-auth";
+    }
+
+    // connector 直接標記已驗證
+    if (role === "connector") {
+      serverWs.authenticated = true;
+      serverWs.username = "connector";
+    }
 
     this.sessions.set(serverWs, {
       role,
       id: serverWs.id,
-      instanceId: serverWs.instanceId,
+      username: serverWs.username,
+      authenticated: serverWs.authenticated,
       connectedAt: serverWs.connectedAt,
     });
 
-    // 廣播上線通知
-    this.broadcast({
-      type: "system",
-      event: role === "connector" ? "connector.online" : "client.join",
-      clientId: serverWs.id,
-      role,
-      timestamp: new Date().toISOString(),
-    }, null);
+    // 系統通知：只通知 connector 上下線，client 登入後才通知
+    if (role === "connector") {
+      this.broadcastSystem("connector.online", serverWs);
+    }
 
     // ── 事件處理 ──
     serverWs.addEventListener("message", (evt) => {
@@ -82,13 +106,11 @@ class HubDO {
     serverWs.addEventListener("close", () => {
       const info = this.sessions.get(serverWs);
       this.sessions.delete(serverWs);
-      this.broadcast({
-        type: "system",
-        event: info?.role === "connector" ? "connector.offline" : "client.leave",
-        clientId: serverWs.id,
-        role: info?.role,
-        timestamp: new Date().toISOString(),
-      }, null);
+      if (info?.role === "connector") {
+        this.broadcastSystem("connector.offline", serverWs);
+      } else if (info?.role === "client" && info?.authenticated) {
+        this.broadcastSystem("client.leave", serverWs);
+      }
     });
 
     serverWs.addEventListener("error", (err) => {
@@ -100,11 +122,42 @@ class HubDO {
 
   // ── 訊息路由 ──
   handleMessage(senderWs, msg) {
-    const senderInfo = this.sessions.get(senderWs);
-    const senderRole = senderInfo?.role;
+    const info = this.sessions.get(senderWs);
+
+    // login 可在未認證狀態下執行
+    if (msg.type === "login") {
+      this.handleLogin(senderWs, msg);
+      return;
+    }
+
+    // ping 和 status 不需要認證
+    if (msg.type === "ping") {
+      senderWs.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
+      return;
+    }
+
+    if (msg.type === "status") {
+      senderWs.send(JSON.stringify({
+        type: "status",
+        clients: this.getClientList(),
+        connectorOnline: this.hasConnector(),
+        authenticated: info?.authenticated || false,
+        timestamp: new Date().toISOString(),
+      }));
+      return;
+    }
+
+    // 所有其他訊息類型需要認證
+    if (!info?.authenticated) {
+      senderWs.send(JSON.stringify({
+        type: "error",
+        error: "請先登入。發送 {\"type\":\"login\",\"username\":\"...\",\"password\":\"...\"}",
+      }));
+      return;
+    }
 
     switch (msg.type) {
-      // 客戶端 → Connector（轉發到本機）
+      // ─ Client → Connector ─
       case "send-text":
       case "send-media":
       case "send-location":
@@ -116,67 +169,92 @@ class HubDO {
       case "get-contacts":
       case "check-number":
       case "get-instances":
-        if (senderRole === "client") {
+        if (info.role === "client") {
           this.forwardToConnector(msg);
         }
         break;
 
-      // Connector → 所有客戶端（入站訊息廣播）
+      // ─ Connector → All Clients ─
       case "inbound":
       case "whatsapp.inbound":
       case "whatsapp.media":
-        if (senderRole === "connector") {
-          this.broadcast(msg, senderWs);
+        if (info.role === "connector") {
+          this.broadcastToClients(msg, senderWs);
         }
         break;
 
-      // Connector → 所有客戶端（發送結果回傳）
       case "send-result":
-        if (senderRole === "connector") {
-          this.broadcast(msg, senderWs);
+      case "query-result":
+        if (info.role === "connector") {
+          this.broadcastToClients(msg, senderWs);
         }
-        break;
-
-      // 查詢在線狀態
-      case "status":
-        senderWs.send(JSON.stringify({
-          type: "status",
-          clients: this.getClientList(),
-          connectorOnline: this.hasConnector(),
-          timestamp: new Date().toISOString(),
-        }));
-        break;
-
-      // 心跳
-      case "ping":
-        senderWs.send(JSON.stringify({ type: "pong", timestamp: Date.now() }));
         break;
 
       default:
-        // 未知訊息類型，如果是 client 發的轉給 connector
-        if (senderRole === "client" && this.hasConnector()) {
+        if (info.role === "client" && this.hasConnector()) {
           this.forwardToConnector(msg);
         }
     }
+  }
+
+  // ── 登入 ──
+  handleLogin(senderWs, msg) {
+    const { username, password } = msg;
+
+    if (!username || !password) {
+      senderWs.send(JSON.stringify({
+        type: "login-error",
+        error: "請提供 username 和 password",
+      }));
+      return;
+    }
+
+    const account = this.validateLogin(username, password);
+    if (!account) {
+      senderWs.send(JSON.stringify({
+        type: "login-error",
+        error: "帳號或密碼錯誤",
+      }));
+      return;
+    }
+
+    senderWs.authenticated = true;
+    senderWs.username = username;
+    const info = this.sessions.get(senderWs);
+    if (info) {
+      info.authenticated = true;
+      info.username = username;
+      info.label = account.label || username;
+    }
+
+    senderWs.send(JSON.stringify({
+      type: "login-ok",
+      username,
+      label: account.label || username,
+      timestamp: new Date().toISOString(),
+    }));
+
+    // 通知其他客戶端有人上線
+    this.broadcastSystem("client.join", senderWs);
   }
 
   // ── 轉發給 connector ──
   forwardToConnector(msg) {
-    let sent = false;
     for (const [ws, info] of this.sessions) {
       if (info.role === "connector" && ws.readyState === 1) {
         ws.send(JSON.stringify(msg));
-        sent = true;
-        break; // 只有一個 connector，轉給它即可
+        return true;
       }
     }
-    return sent;
+    return false;
   }
 
-  // ── 廣播給所有客戶端 ──
-  broadcast(msg, excludeWs) {
+  // ── 廣播給已認證客戶端 ──
+  broadcastToClients(msg, excludeWs) {
     for (const [ws, info] of this.sessions) {
       if (ws === excludeWs) continue;
+      if (info.role !== "client") continue;
+      if (!info.authenticated) continue;
       if (ws.readyState !== 1) {
         this.sessions.delete(ws);
         continue;
@@ -185,14 +263,35 @@ class HubDO {
     }
   }
 
-  // ── 查詢狀態 ──
+  // ── 系統廣播 ──
+  broadcastSystem(event, senderWs) {
+    const info = senderWs ? this.sessions.get(senderWs) : null;
+    for (const [ws, i] of this.sessions) {
+      if (ws === senderWs) continue;
+      if (ws.readyState !== 1) { this.sessions.delete(ws); continue; }
+      // 只發給已認證的 client 和 connector
+      if (i.role === "connector" || i.authenticated) {
+        ws.send(JSON.stringify({
+          type: "system",
+          event,
+          clientId: info?.id,
+          username: info?.username || null,
+          role: info?.role,
+          timestamp: new Date().toISOString(),
+        }));
+      }
+    }
+  }
+
+  // ── 查詢 ──
   getClientList() {
     const clients = [];
     for (const [ws, info] of this.sessions) {
       clients.push({
         id: info.id,
         role: info.role,
-        instanceId: info.instanceId,
+        username: info.username || null,
+        authenticated: info.authenticated,
         connectedAt: new Date(info.connectedAt).toISOString(),
       });
     }
@@ -218,45 +317,37 @@ export default {
 
     // WebSocket 升級
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      // 使用固定的 DO ID，確保所有客戶端都在同一個 DO 實例
       const doId = env.HUB.idFromName("primary");
       const doStub = env.HUB.get(doId);
       return doStub.fetch(request);
     }
 
-    // HTTP API — 健康檢查
+    // HTTP — 健康檢查
     if (url.pathname === "/health") {
       return new Response(JSON.stringify({
         status: "ok",
         service: "WhatsApp Gateway Hub",
+        authEnabled: true,
         timestamp: new Date().toISOString(),
       }), {
         headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
       });
     }
 
-    // HTTP API — 用 POST 發送訊息（方便 CRM 不必維護 WebSocket）
+    // HTTP — POST /api/send（需帶 Authorization 和帳號資訊）
     if (url.pathname === "/api/send" && request.method === "POST") {
       try {
         const body = await request.json();
         const doId = env.HUB.idFromName("primary");
         const doStub = env.HUB.get(doId);
-
-        // 透過 DO 內部的 HTTP 端點轉發
-        // 這裡用一個內部請求把訊息送進 DO
-        const msgUrl = new URL(request.url);
-        msgUrl.pathname = "/__internal__/relay";
-
-        // 把訊息直接透過 DO 的 fetch 發送
-        const doResponse = await doStub.fetch(
-          new Request(msgUrl.toString(), {
+        const result = await doStub.fetch(
+          new Request(url.origin + "/__internal__/relay", {
             method: "POST",
             body: JSON.stringify({ ...body, _relay: true, _from: "http-api" }),
           })
         );
-
-        const result = await doResponse.json().catch(() => ({ ok: false }));
-        return new Response(JSON.stringify(result), {
+        const data = await result.json().catch(() => ({ ok: false }));
+        return new Response(JSON.stringify(data), {
           headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
         });
       } catch (err) {
@@ -267,13 +358,12 @@ export default {
       }
     }
 
-    // CORS preflight
     if (request.method === "OPTIONS") {
       return new Response(null, {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization",
           "Access-Control-Max-Age": "86400",
         },
       });

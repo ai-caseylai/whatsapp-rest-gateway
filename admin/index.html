@@ -29,7 +29,7 @@
   button.danger { color: var(--danger); }
   button.danger:hover { background: #3d1119; border-color: var(--danger); }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
-  textarea, input[type="text"], select { width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); outline: none; }
+  textarea, input[type="text"], input[type="password"], select { width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); outline: none; }
   textarea:focus, input:focus { border-color: var(--primary); }
   textarea { resize: vertical; min-height: 80px; }
   .form-group { margin-bottom: 12px; }
@@ -44,15 +44,38 @@
   .ws-row:last-child { border-bottom: none; }
   .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: #1c2a3a; color: var(--primary); display: inline-block; margin-right: 4px; }
   .empty { text-align: center; color: var(--text-muted); padding: 20px; font-size: 13px; }
+  .login-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+  .login-box { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 32px; width: 360px; max-width: 90vw; }
+  .login-box h2 { font-size: 18px; margin-bottom: 4px; color: var(--text); }
+  .login-box .subtitle { font-size: 13px; color: var(--text-muted); margin-bottom: 20px; }
+  .login-box input { width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); outline: none; margin-bottom: 12px; }
+  .login-box input:focus { border-color: var(--primary); }
+  .login-box .error-msg { color: var(--danger); font-size: 12px; margin-bottom: 12px; min-height: 18px; }
+  .login-box button { width: 100%; justify-content: center; padding: 10px; font-size: 14px; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
+
+<!-- 登入遮罩 -->
+<div class="login-overlay" id="loginOverlay">
+  <div class="login-box">
+    <h2>WhatsApp Gateway Hub</h2>
+    <div class="subtitle">請登入帳號以繼續</div>
+    <input type="text" id="loginUser" placeholder="帳號" autocomplete="username" />
+    <input type="password" id="loginPass" placeholder="密碼" autocomplete="current-password" />
+    <div class="error-msg" id="loginError"></div>
+    <button class="primary" id="loginBtn" onclick="doLogin()">登入</button>
+  </div>
+</div>
+
 <div class="topbar">
   <div>
     <h1>WhatsApp REST Gateway</h1>
     <span style="font-size:12px;color:var(--text-muted)" id="topStatus">載入中...</span>
   </div>
   <span id="authBadge" style="font-size:11px;color:var(--text-muted)"></span>
+  <button id="logoutBtn" class="danger hidden" onclick="doLogout()">登出</button>
 </div>
 
 <div class="container">
@@ -142,16 +165,55 @@ let hubWs = null;
 let hubClients = 0;
 let hubUsername = '';
 
-function connectHub() {
+// ── 登入表單 ──
+function doLogin() {
+  const user = document.getElementById('loginUser').value.trim();
+  const pass = document.getElementById('loginPass').value.trim();
+  if (!user || !pass) {
+    document.getElementById('loginError').textContent = '請輸入帳號和密碼';
+    return;
+  }
+  const btn = document.getElementById('loginBtn');
+  btn.disabled = true;
+  btn.textContent = '登入中...';
+  document.getElementById('loginError').textContent = '';
+  connectHub(user, pass);
+}
+
+function doLogout() {
+  if (hubWs) {
+    hubWs.close();
+    hubWs = null;
+  }
+  hubUsername = '';
+  document.getElementById('loginOverlay').classList.remove('hidden');
+  document.getElementById('logoutBtn').classList.add('hidden');
+  document.getElementById('authBadge').textContent = '';
+  document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>未連接';
+  document.getElementById('hubClients').textContent = '0';
+  document.getElementById('connStatus').innerHTML = '<span class="dot yellow"></span>檢查中';
+  document.getElementById('loginUser').value = '';
+  document.getElementById('loginPass').value = '';
+  document.getElementById('loginBtn').disabled = false;
+  document.getElementById('loginBtn').textContent = '登入';
+  document.getElementById('loginError').textContent = '';
+}
+
+document.getElementById('loginPass').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') doLogin();
+});
+
+document.getElementById('loginUser').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') document.getElementById('loginPass').focus();
+});
+
+function connectHub(user, pass) {
   try {
     hubWs = new WebSocket(`${HUB_URL}?role=client`);
     document.getElementById('hubUrl').textContent = HUB_URL;
 
     hubWs.onopen = () => {
       document.getElementById('hubStatus').innerHTML = '<span class="dot yellow"></span>已連接，登入中...';
-      // 自動登入（可改成彈窗輸入）
-      const user = prompt('Hub 帳號:') || 'admin';
-      const pass = prompt('Hub 密碼:') || 'admin123';
       hubWs.send(JSON.stringify({ type: 'login', username: user, password: pass }));
     };
 
@@ -160,11 +222,17 @@ function connectHub() {
       if (msg.type === 'login-ok') {
         hubUsername = msg.username;
         document.getElementById('hubStatus').innerHTML = '<span class="dot green"></span>已登入 (' + msg.username + ')';
+        document.getElementById('loginOverlay').classList.add('hidden');
+        document.getElementById('logoutBtn').classList.remove('hidden');
         hubWs.send(JSON.stringify({ type: 'status' }));
         toast('登入成功：' + (msg.label || msg.username), true);
       } else if (msg.type === 'login-error') {
-        document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>登入失敗: ' + msg.error;
-        toast('登入失敗: ' + msg.error, false);
+        document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>未連接';
+        document.getElementById('loginError').textContent = msg.error || '登入失敗';
+        document.getElementById('loginBtn').disabled = false;
+        document.getElementById('loginBtn').textContent = '登入';
+        hubWs.close();
+        hubWs = null;
       } else if (msg.type === 'status') {
         hubClients = (msg.clients || []).filter(c => c.role === 'client' && c.authenticated).length;
         document.getElementById('hubClients').textContent = hubClients;
@@ -183,17 +251,26 @@ function connectHub() {
     };
 
     hubWs.onclose = () => {
-      document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>已斷線';
-      document.getElementById('connStatus').innerHTML = '<span class="dot red"></span>—';
-      setTimeout(connectHub, 5000);
+      if (document.getElementById('loginOverlay').classList.contains('hidden')) {
+        // 已登入後斷線 → 自動重連
+        document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>已斷線';
+        document.getElementById('connStatus').innerHTML = '<span class="dot red"></span>—';
+        setTimeout(() => connectHub(user, pass), 5000);
+      } else {
+        // 登入前斷線 → 回到登入頁
+        document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>未連接';
+        document.getElementById('loginBtn').disabled = false;
+        document.getElementById('loginBtn').textContent = '登入';
+      }
     };
 
     hubWs.onerror = () => {};
   } catch (e) {
-    setTimeout(connectHub, 5000);
+    document.getElementById('loginBtn').disabled = false;
+    document.getElementById('loginBtn').textContent = '登入';
+    setTimeout(() => connectHub(user, pass), 5000);
   }
 }
-connectHub();
 
 function setStatus(msg, ok) {
   document.getElementById('topStatus').innerHTML = `

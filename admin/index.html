@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>WhatsApp REST Gateway</title>
+<style>
+  :root { --bg: #0d1117; --card: #161b22; --border: #30363d; --text: #c9d1d9; --text-muted: #8b949e; --primary: #58a6ff; --success: #3fb950; --warn: #d29922; --danger: #f85149; --radius: 8px; }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.5; min-height: 100vh; }
+  .container { max-width: 960px; margin: 0 auto; padding: 20px; }
+  h1 { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+  h2 { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: var(--text-muted); }
+  .topbar { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid var(--border); background: var(--card); margin-bottom: 20px; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+  .dot.green { background: var(--success); }
+  .dot.red { background: var(--danger); }
+  .dot.yellow { background: var(--warn); }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin-bottom: 24px; }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+  .card .label { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .card .value { font-size: 18px; font-weight: 600; }
+  .card .sub { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+  .actions { display: flex; gap: 8px; margin-top: 12px; }
+  button, .btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 14px; font-size: 13px; font-weight: 500; border-radius: var(--radius); border: 1px solid var(--border); background: var(--card); color: var(--text); cursor: pointer; white-space: nowrap; }
+  button:hover, .btn:hover { background: #1c2129; }
+  button.primary { background: #238636; border-color: #2ea043; color: #fff; }
+  button.primary:hover { background: #2ea043; }
+  button.danger { color: var(--danger); }
+  button.danger:hover { background: #3d1119; border-color: var(--danger); }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  textarea, input[type="text"], select { width: 100%; padding: 8px 12px; font-size: 13px; font-family: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); outline: none; }
+  textarea:focus, input:focus { border-color: var(--primary); }
+  textarea { resize: vertical; min-height: 80px; }
+  .form-group { margin-bottom: 12px; }
+  .form-group label { display: block; font-size: 12px; color: var(--text-muted); margin-bottom: 4px; font-weight: 500; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .preview { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px; font-family: "SF Mono", "Fira Code", monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all; max-height: 200px; overflow-y: auto; }
+  .toast { position: fixed; bottom: 20px; right: 20px; padding: 10px 18px; border-radius: var(--radius); font-size: 13px; z-index: 999; animation: fadeIn 0.2s; }
+  .toast.ok { background: #238636; color: #fff; }
+  .toast.err { background: #da3633; color: #fff; }
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+  .ws-row { display: flex; align-items: center; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); }
+  .ws-row:last-child { border-bottom: none; }
+  .badge { font-size: 11px; padding: 2px 8px; border-radius: 12px; background: #1c2a3a; color: var(--primary); display: inline-block; margin-right: 4px; }
+  .empty { text-align: center; color: var(--text-muted); padding: 20px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div>
+    <h1>WhatsApp REST Gateway</h1>
+    <span style="font-size:12px;color:var(--text-muted)" id="topStatus">載入中...</span>
+  </div>
+  <span id="authBadge" style="font-size:11px;color:var(--text-muted)"></span>
+</div>
+
+<div class="container">
+
+<!-- 系統狀態 -->
+<h2>系統狀態</h2>
+<div class="grid" id="sysCards">
+  <div class="card">
+    <div class="label">Cloudflare Hub</div>
+    <div class="value" id="hubStatus"><span class="dot red"></span>未連接</div>
+    <div class="sub" id="hubUrl">—</div>
+  </div>
+  <div class="card">
+    <div class="label">在線客戶端</div>
+    <div class="value" id="hubClients">0</div>
+    <div class="sub">CRM / App / Bot</div>
+  </div>
+  <div class="card">
+    <div class="label">Connector</div>
+    <div class="value" id="connStatus"><span class="dot yellow"></span>檢查中</div>
+    <div class="sub">本機橋接器</div>
+  </div>
+</div>
+<div class="grid" id="instanceCards"></div>
+
+<!-- 發送訊息 -->
+<h2>發送訊息</h2>
+<div class="card" style="margin-bottom:24px">
+  <div class="form-row">
+    <div class="form-group">
+      <label>WhatsApp 實例</label>
+      <select id="sendInstance">
+        <option value="1">1 — 一號</option>
+        <option value="2">2 — 二號</option>
+        <option value="3">3 — 三號</option>
+        <option value="4">4 — 四號</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>目標號碼</label>
+      <input type="text" id="sendTarget" placeholder="+85212345678" />
+    </div>
+  </div>
+  <div class="form-group">
+    <label>訊息內容</label>
+    <textarea id="sendText" placeholder="輸入訊息..."></textarea>
+  </div>
+  <div class="actions">
+    <button class="primary" onclick="sendText()">發送文字</button>
+    <button onclick="simulateAction()">顯示「輸入中」</button>
+  </div>
+</div>
+
+<!-- Webhook -->
+<h2>Webhook 訂閱</h2>
+<div class="card" style="margin-bottom:24px">
+  <div class="form-row">
+    <div class="form-group">
+      <label>Webhook URL</label>
+      <input type="text" id="whUrl" placeholder="https://your-crm.com/webhook" />
+    </div>
+    <div class="form-group">
+      <label>事件過濾 (選填，逗號分隔)</label>
+      <input type="text" id="whEvents" placeholder="whatsapp.inbound,whatsapp.outbound" />
+    </div>
+  </div>
+  <div class="actions">
+    <button class="primary" onclick="subscribeWebhook()">訂閱</button>
+  </div>
+  <div id="whList" style="margin-top:12px"></div>
+</div>
+
+<!-- 最新回應 -->
+<h2>API 回應</h2>
+<div class="card"><div class="preview" id="lastResponse">等待操作...</div></div>
+
+</div>
+
+<script>
+// ── 初始化 ──
+const API = '';
+let apiKey = '';
+
+// ── Cloudflare Hub WebSocket ──
+const HUB_URL = 'wss://whatsapp-gateway-hub.ai-caseylai.workers.dev';
+let hubWs = null;
+let hubClients = 0;
+
+function connectHub() {
+  try {
+    hubWs = new WebSocket(`${HUB_URL}?role=client`);
+    document.getElementById('hubUrl').textContent = HUB_URL;
+
+    hubWs.onopen = () => {
+      document.getElementById('hubStatus').innerHTML = '<span class="dot green"></span>已連接';
+      hubWs.send(JSON.stringify({ type: 'status' }));
+    };
+
+    hubWs.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'status') {
+        hubClients = (msg.clients || []).filter(c => c.role === 'client').length;
+        document.getElementById('hubClients').textContent = hubClients;
+        document.getElementById('connStatus').innerHTML = msg.connectorOnline
+          ? '<span class="dot green"></span>在線'
+          : '<span class="dot red"></span>離線';
+      } else if (msg.type === 'system') {
+        if (msg.event === 'connector.online') {
+          document.getElementById('connStatus').innerHTML = '<span class="dot green"></span>在線';
+        } else if (msg.event === 'connector.offline') {
+          document.getElementById('connStatus').innerHTML = '<span class="dot red"></span>離線';
+        } else if (msg.event === 'client.join' || msg.event === 'client.leave') {
+          hubWs.send(JSON.stringify({ type: 'status' }));
+        }
+      }
+    };
+
+    hubWs.onclose = () => {
+      document.getElementById('hubStatus').innerHTML = '<span class="dot red"></span>已斷線';
+      document.getElementById('connStatus').innerHTML = '<span class="dot red"></span>—';
+      setTimeout(connectHub, 5000);
+    };
+
+    hubWs.onerror = () => {};
+  } catch (e) {
+    setTimeout(connectHub, 5000);
+  }
+}
+connectHub();
+
+function setStatus(msg, ok) {
+  document.getElementById('topStatus').innerHTML = `
+    <span class="dot ${ok ? 'green' : 'red'}"></span>${msg}
+  `;
+}
+
+function toast(msg, ok) {
+  const t = document.createElement('div');
+  t.className = `toast ${ok?'ok':'err'}`;
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(() => t.remove(), 3000);
+}
+
+async function api(path, opts = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (apiKey) headers['Authorization'] = `Bearer ${apiKey}`;
+  const res = await fetch(`${API}${path}`, { headers, ...opts });
+  const data = await res.json().catch(() => ({ raw: true }));
+  return { ok: res.ok, status: res.status, ...data };
+}
+
+function showResponse(data) {
+  document.getElementById('lastResponse').textContent = JSON.stringify(data, null, 2);
+}
+
+// ── 健康檢查 ──
+async function refreshHealth() {
+  const res = await api('/health');
+  if (res.ok && res.status === 'ok') {
+    setStatus(`運行 ${Math.floor(res.uptime)}s · AI Gateway: ${res.gateway?.connected ? '已連接' : '未連接'} · 記憶體 ${res.memory}`, true);
+    document.getElementById('authBadge').textContent = res.authEnabled ? '認證已啟用' : '認證未啟用';
+
+    // 實例卡片
+    const inst = res.instances || {};
+    document.getElementById('instanceCards').innerHTML = Object.entries(inst).map(([id, info]) => `
+      <div class="card">
+        <div class="label">實例 ${id}</div>
+        <div class="value">${info.label}</div>
+        <div class="sub">${info.url}</div>
+        <div class="actions">
+          <a class="btn" href="${info.url}/" target="_blank">QR 碼</a>
+        </div>
+      </div>
+    `).join('');
+
+    // Webhook 列表
+    if (res.subscribers !== undefined) {
+      loadWebhooks();
+    }
+  } else {
+    setStatus('無法連線', false);
+  }
+  return res;
+}
+
+// ── 發送文字 ──
+async function sendText() {
+  const instance = parseInt(document.getElementById('sendInstance').value);
+  const target = document.getElementById('sendTarget').value.trim();
+  const text = document.getElementById('sendText').value.trim();
+  if (!target || !text) return toast('請填寫目標號碼和訊息內容', false);
+
+  const res = await api('/api/send-text', {
+    method: 'POST',
+    body: JSON.stringify({ instance, target, text })
+  });
+  showResponse(res);
+  toast(res.ok ? '已發送' : `錯誤: ${res.error}`, res.ok);
+  if (res.ok) document.getElementById('sendText').value = '';
+}
+
+// ── 模擬 ──
+async function simulateAction() {
+  const instance = parseInt(document.getElementById('sendInstance').value);
+  const target = document.getElementById('sendTarget').value.trim();
+  if (!target) return toast('請填寫目標號碼', false);
+
+  const res = await api('/api/simulate', {
+    method: 'POST',
+    body: JSON.stringify({ instance, target, action: 'composing' })
+  });
+  showResponse(res);
+  toast(res.ok ? '已送出' : `錯誤: ${res.error}`, res.ok);
+}
+
+// ── Webhook ──
+async function subscribeWebhook() {
+  const url = document.getElementById('whUrl').value.trim();
+  if (!url) return toast('請填寫 webhook URL', false);
+
+  const eventsStr = document.getElementById('whEvents').value.trim();
+  const events = eventsStr ? eventsStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+  const res = await api('/api/webhooks/subscribe', {
+    method: 'POST',
+    body: JSON.stringify({ url, events })
+  });
+  showResponse(res);
+  if (res.ok) {
+    toast('已訂閱', true);
+    document.getElementById('whUrl').value = '';
+    loadWebhooks();
+  } else {
+    toast(`錯誤: ${res.error}`, false);
+  }
+}
+
+async function unsubscribeWebhook(url) {
+  const res = await api('/api/webhooks/unsubscribe', {
+    method: 'DELETE',
+    body: JSON.stringify({ url })
+  });
+  showResponse(res);
+  toast(res.ok ? '已取消' : `錯誤: ${res.error}`, res.ok);
+  if (res.ok) loadWebhooks();
+}
+
+async function loadWebhooks() {
+  const res = await api('/api/webhooks');
+  const subs = res.subscribers || [];
+  const el = document.getElementById('whList');
+  if (subs.length === 0) {
+    el.innerHTML = '<div class="empty">尚無訂閱</div>';
+    return;
+  }
+  el.innerHTML = subs.map(s => `
+    <div class="ws-row">
+      <div>
+        <span class="badge">${s.events?.length ? s.events.join(', ') : '全部事件'}</span>
+        ${s.url}
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${s.subscribedAt}</div>
+      </div>
+      <button class="danger" onclick="unsubscribeWebhook('${s.url}')">取消</button>
+    </div>
+  `).join('');
+}
+
+// ── 輪詢 ──
+refreshHealth();
+setInterval(refreshHealth, 15000);
+</script>
+</body>
+</html>

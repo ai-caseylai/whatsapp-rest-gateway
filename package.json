@@ -5,13 +5,27 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch server.js"
+    "start-all": "node server.js & node connector.js & wait",
+    "dev": "node --watch server.js",
+    "connector": "node connector.js",
+    "deploy": "wrangler deploy",
+    "deploy-hub": "cd cloudflare && npx wrangler deploy",
+    "preview": "wrangler dev"
   },
-  "keywords": ["whatsapp", "openclaw", "baileys", "rest-api", "webhook"],
+  "keywords": [
+    "whatsapp",
+    "openclaw",
+    "baileys",
+    "rest-api",
+    "webhook"
+  ],
   "license": "MIT",
   "type": "commonjs",
   "dependencies": {
     "express": "^5.2.1",
     "openclaw-node": "^0.9.0"
+  },
+  "devDependencies": {
+    "wrangler": "^4.90.1"
   }
 }

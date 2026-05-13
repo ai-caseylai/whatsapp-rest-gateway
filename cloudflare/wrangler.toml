@@ -1,0 +1,11 @@
+name = "whatsapp-gateway-hub"
+main = "src/index.js"
+compatibility_date = "2025-05-01"
+
+[[durable_objects.bindings]]
+name = "HUB"
+class_name = "HubDO"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["HubDO"]

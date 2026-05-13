@@ -158,9 +158,12 @@ function apiKeyAuth(req, res, next) {
   next();
 }
 
-// 除了 /health 和 /webhook/inbound 之外，全部需要認證
+// 靜態檔案 — 管理頁面
+app.use("/admin", express.static(path.join(__dirname, "admin")));
+
+// 除了 /health、/admin、/webhook/inbound 之外，全部需要認證
 app.use((req, res, next) => {
-  if (req.path === "/health" || req.path.startsWith("/webhook/inbound")) {
+  if (req.path === "/health" || req.path.startsWith("/admin") || req.path.startsWith("/webhook/inbound")) {
     return next();
   }
   apiKeyAuth(req, res, next);
